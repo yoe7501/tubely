@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -53,27 +56,33 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read file", err)
+	mediaType := header.Header.Get("Content-Type")
+	parts := strings.Split(mediaType, "/")
+	if len(parts) != 2 || parts[0] != "image" {
+		respondWithError(w, http.StatusBadRequest, "Thumbnail must be an image", nil)
 		return
 	}
-
-	// 5. Store it and update the video
-	videoThumbnails[videoID] = thumbnail{
-		data:      imageData,
-		mediaType: header.Header.Get("Content-Type"),
+	ext := parts[1]
+	filename := videoID.String() + "." + ext
+	filePath := filepath.Join(cfg.assetsRoot, filename)
+	newFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "errror creating new file", err)
+		return
 	}
-	url := "http://localhost:8091/api/thumbnails/" + videoID.String()
-	video.ThumbnailURL = &url
-	fmt.Println(video)
+	defer newFile.Close()
+	_, err = io.Copy(newFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "error copying file", err)
+		return
+	}
+	thumbnailURL := fmt.Sprintf("http://localhost:8091/assets/%s", filename)
+	video.ThumbnailURL = &thumbnailURL
 
 	if err := cfg.db.UpdateVideo(video); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
-	fmt.Println("saved thumbnail url:", *video.ThumbnailURL, "for", videoID)
 
 	// 6. Respond with the struct itself, not pre-marshaled bytes
 	respondWithJSON(w, http.StatusOK, video)
